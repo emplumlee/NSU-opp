@@ -174,7 +174,7 @@ double *solve_SLAE(const double *A, double *b, int *sizes_per_threads, int *disp
     delete[](alpha_z);
     delete[](beta_z);
 
-    std::cout << "iterCount: " << iter_count << std::endl;
+    std::cout << "iter_count: " << iter_count << std::endl;
 
     if (diverge) {
         delete[](solution);
@@ -206,7 +206,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (rank == 0) {
-        file_stream << "Matrix size: " << N << " threadCount: " << thread_count << std::endl;
+        file_stream << "Matrix size: " << N << " thread_count: " << thread_count << std::endl;
     }
 
     int sizes_per_threads[thread_count];
@@ -217,25 +217,51 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < thread_count; ++i) {
         dispositions[i] = dispositions[i - 1] + sizes_per_threads[i - 1];
     }
-
+    
+    int elem_count[thread_count];
+    for (int i = 0; i < thread_count; ++i) {
+        elem_count[i] = N * sizes_per_threads[i];
+    }
+    
+    int offset_matrix[thread_count];
+    offset_matrix[0] = 0;
+    for (int i = 1; i < thread_count; ++i) {
+        offset_matrix[i] = offset_matrix[i-1] + elem_count[i - 1];
+    }
+    
+    double* A0 = nullptr;
+    double* u = nullptr;
     auto *b = new double[N];
-    auto *u = new double[N];
-    auto *A = new double[sizes_per_threads[rank] * N];
-
-    for (int i = 0; i < sizes_per_threads[rank]; i++) {
-        for (int j = 0; j < N; j++) {
-            if (i + dispositions[rank] == j) {
-                A[i * N + j] = 2;
-            } else {
-                A[i * N + j] = 1;
+    
+    if (rank == 0) {
+        A0 = new double[(long int)N * N];
+        for (int i = 0; i < N; ++i) {
+            for (int j = 0; j < N; ++j) {
+                if (i == j) {
+                    A0[i * N + j] = 2;
+                }
+                else {
+                    A0[i * N + j] = 1;
+                }
+            }
+        }
+        
+        u = new double[N];
+        for (int i = 0; i < N; ++i) {
+            u[i] = sin(2 * M_PI * i / double(N));
+        }
+        
+        for (int i = 0; i < N; ++i) {
+            b[i] = 0;
+            for (int j = 0; j < N; ++j) {
+                b[i] += A0[i * N + j] * u[j];
             }
         }
     }
-
-    for (int i = 0; i < N; ++i) {
-        u[i] = sin(2 * M_PI * i / double(N));
-    }
-    matrix_vector_multiply(A, u, sizes_per_threads, dispositions, N, b);
+    MPI_Bcast(b, N, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    
+    double* A = new double[elem_count[rank]];
+    MPI_Scatterv(A0, elem_count, offset_matrix, MPI_DOUBLE, A, elem_count[rank], MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
     auto start_time = system_clock::now();
     double *solution = solve_SLAE(A, b, sizes_per_threads, dispositions, N);
@@ -255,6 +281,7 @@ int main(int argc, char *argv[]) {
     delete[](solution);
     delete[](b);
     delete[](u);
+    delete[](A0);
     delete[](A);
     MPI_Finalize();
     return 0;
